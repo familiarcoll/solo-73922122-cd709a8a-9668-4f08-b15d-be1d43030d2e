@@ -1,0 +1,56 @@
+# Two independent API processes sharing one SQLite database file, fronted by
+# a round-robin Nginx load balancer. Bring up with:  docker compose up --build
+services:
+  api-a:
+    build: .
+    image: refresh-token-auth:latest
+    container_name: auth-api-a
+    env_file: .env
+    environment:
+      AUTH_DB_PATH: /data/auth.db
+    volumes:
+      - auth-data:/data
+    ports:
+      - "8001:8000"   # direct access to process A
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api-b:
+    image: refresh-token-auth:latest
+    build: .
+    container_name: auth-api-b
+    env_file: .env
+    environment:
+      AUTH_DB_PATH: /data/auth.db
+    volumes:
+      - auth-data:/data
+    ports:
+      - "8002:8000"   # direct access to process B
+    restart: unless-stopped
+    depends_on:
+      api-a:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  lb:
+    image: nginx:1.27-alpine
+    container_name: auth-lb
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"     # canonical entry point, load-balanced across A and B
+    depends_on:
+      - api-a
+      - api-b
+    restart: unless-stopped
+
+volumes:
+  auth-data:
